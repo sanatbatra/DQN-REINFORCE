@@ -15,12 +15,15 @@ class ReinforceCartPole:
         self.env.seed(543)
         torch.manual_seed(543)
         self.policy_model = PolicyModel()
-        self.optimizer = optim.Adam(self.policy_model.parameters(), lr=1e-2)
+        self.optimizer = optim.Adam(self.policy_model.parameters(), lr=0.009)
         self.gamma = gamma
         self.eps = np.finfo(np.float32).eps.item()
+        self.loss_list = []
+        self.ep_no_list = []
 
     def get_action(self, state):
         state_torch = torch.from_numpy(state).float().unsqueeze(0)
+
         probs = self.policy_model(state_torch)
         first_action_probability = probs[0][0]
         random_no = random.random()
@@ -29,23 +32,20 @@ class ReinforceCartPole:
         else:
             action = torch.tensor(1, dtype=torch.long)
 
-
         m = Categorical(probs)
-        print(action)
+        # print(action)
         log_prob = m.log_prob(action)
-        # print(log_prob)
-        # policy.saved_log_probs.append(m.log_prob(action))
         return action, log_prob
 
     def get_returns(self, episode_rewards):
         return_sum = 0.0
         returns = []
         for r in reversed(episode_rewards):
-            return_sum = r + self.gamma * return_sum
+            return_sum = r + (self.gamma * return_sum)
             returns.append(return_sum)
 
         returns = torch.tensor(list(reversed(returns)))
-        returns = (returns - returns.mean()) / (returns.std() + self.eps)
+        returns = (returns-returns.mean()) / (returns.std()+self.eps)
 
         return returns
 
@@ -53,23 +53,26 @@ class ReinforceCartPole:
         returns = self.get_returns(episode_rewards)
         policy_loss = []
 
-        for log_prob, ret in zip(episode_log_probs, returns):
-            policy_loss.append(-log_prob * ret)
+        for logp, ret in zip(episode_log_probs, returns):
+            policy_loss.append(-logp * ret)
 
         self.optimizer.zero_grad()
         loss = torch.cat(policy_loss).sum()
+        self.loss_list.append(loss.item())
         loss.backward()
         self.optimizer.step()
 
-    def train(self, no_episodes, limit=4000, rendering=False, max_steps=50000):
-        running_reward = 10
-        plot_running_rewards = []
+    def train(self, no_episodes, limit=4000, rendering=False, max_steps=500000):
+        running_reward = 10.0
+        plot_rewards = []
         plot_episode_nos = []
+        plot_mean_rewards = []
+        plot_mr_epno = []
         for ep in range(1, no_episodes):
             state = self.env.reset()
             episode_rewards = []
             episode_log_probs = []
-            ep_reward = 0
+            ep_reward = 0.0
             for s in range(max_steps):
 
                 action, log_prob = self.get_action(state)
@@ -85,9 +88,13 @@ class ReinforceCartPole:
                 if done:
                     # time.sleep(0.5)
                     break
+
             running_reward = 0.05 * ep_reward + (1 - 0.05) * running_reward
-            plot_running_rewards.append(running_reward)
+            plot_rewards.append(ep_reward)
             plot_episode_nos.append(ep)
+            if ep > 100:
+                plot_mean_rewards.append(sum(plot_rewards[-100:])/len(plot_rewards[-100:]))
+                plot_mr_epno.append(ep)
             self.optimize(episode_log_probs, episode_rewards)
             if ep % 25 == 0:
                 print('Episode Number: {}\t Latest Reward: {:.2f}\tAverage Running reward: {:.2f}'.format(
@@ -99,23 +106,31 @@ class ReinforceCartPole:
                       "the last episode runs to {} time steps!".format(running_reward, s))
                 break
 
-        self.plot(plot_running_rewards, plot_episode_nos)
+        self.plot(plot_rewards, plot_mean_rewards, plot_mr_epno, plot_episode_nos)
 
         self.env.close()
 
-    def plot(self, plot_running_rewards, plot_episode_nos):
-        plt.plot(plot_episode_nos, plot_running_rewards)
+    def plot(self, plot_rewards, plot_mean_rewards, plot_mr_epno, plot_episode_nos):
+        plt.plot(plot_episode_nos, plot_rewards)
+        plt.plot(plot_mr_epno, plot_mean_rewards)
         plt.ylabel('Running Rewards')
         plt.xlabel('Episode No')
+        plt.legend(['Reward', '100 Episode Mean Reward'], loc='upper left')
+        plt.savefig('RewardsVsEpisodeNo.png')
+
+        plt.clf()
+        plt.plot(plot_episode_nos, self.loss_list)
+        plt.ylabel('Training Loss')
+        plt.xlabel('Episode No')
         # plt.legend(['AgentScore'], loc='upper left')
-        plt.savefig('RunningRewardsVsEpisodeNo.png')
+        plt.savefig('LossVsEpisodeNo.png')
 
 
 if __name__ == '__main__':
     env = gym.make('CartPole-v1')
     gamma = 0.99
     reinforce = ReinforceCartPole(env, gamma)
-    limit = 4000
-    print('Need to reach:', env.spec.reward_threshold)
-    reinforce.train(100000, 4000)
+    limit = 495
+    print('Need to reach:', limit)
+    reinforce.train(100000, limit)
 

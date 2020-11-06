@@ -253,8 +253,8 @@ if __name__ == '__main__':
     env = gym.make('CarRacing-v0').unwrapped
     start_epsilon = 0.95
     end_epsilon = 0.05
-    gamma = 0.9
-    replay_size = 100000
+    gamma = 0.95
+    replay_size = 80000
     batch_size = 64
     policy_update_frequency = 3  # steps
     target_update_frequency = 10  # episodes
