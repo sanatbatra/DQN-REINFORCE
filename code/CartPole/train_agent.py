@@ -54,7 +54,7 @@ class ReinforceCartPole:
         policy_loss = []
 
         for log_prob, ret in zip(episode_log_probs, returns):
-            policy_loss.append(log_prob * ret)
+            policy_loss.append(-log_prob * ret)
 
         self.optimizer.zero_grad()
         loss = torch.cat(policy_loss).sum()
