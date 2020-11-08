@@ -11,8 +11,11 @@ from model import *
 from collections import deque
 
 action_list = [np.array([-1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
-                            np.array([0.0, 0.0, 0.2]), np.array([0.0, 0.0, 0.0]), np.array([-1.0, 1.0, 0.0]), np.array([1.0, 1.0, 0.0]),
-                            np.array([-1.0, 0.0, 0.2]), np.array([1.0, 0.0, 0.2])]
+               np.array([0.0, 0.0, 0.2]), np.array([-1.0, 1.0, 0.0]), np.array([1.0, 1.0, 0.0]),
+               np.array([-1.0, 0.0, 0.2]), np.array([1.0, 0.0, 0.2]), np.array([0.0, 0.0, 0.0]),
+               np.array([-1.0, 1.0, 0.2]), np.array([1.0, 1.0, 0.2]), np.array([0.0, 1.0, 0.2])]
+
+device = 'cpu'
 
 
 def get_action(policy, state_list):
@@ -30,6 +33,7 @@ def run_episode(env, agent, rendering=True, max_timesteps=1000):
     state = rgb2gray(state)
     # state = state
     state_list = [state for _ in range(history_length)]
+
     count = 0
     while True:
 
@@ -38,11 +42,9 @@ def run_episode(env, agent, rendering=True, max_timesteps=1000):
 
         state_list.append(state)
         # print(state_list)
-        state_list_list = np.array(state_list)
-        # print(state_list_list)
-        state_list_list = torch.tensor(state_list_list)
-
-        state_list_list = state_list_list.reshape(-1, history_length, 96, 96)
+        state_list_list = torch.from_numpy(np.array(state_list, dtype=np.float32)).to(device, dtype=torch.float).reshape(-1,
+                                                                                                       history_length,
+                                                                                                       96, 96)
 
         # TODO: get the action from your agent! If you use discretized actions you need to transform them to continuous
         # actions again. a needs to have a shape like np.array([0.0, 0.0, 0.0])
@@ -51,13 +53,12 @@ def run_episode(env, agent, rendering=True, max_timesteps=1000):
 
         next_state, r, done, info = env.step(a)
         episode_reward += r
+        step += 1
         state = next_state
         state = rgb2gray(state)
-        step += 1
 
         if rendering:
             env.render()
-
         if done or step > max_timesteps:
             break
 
@@ -71,17 +72,19 @@ if __name__ == "__main__":
     # important: don't set rendering to False for evaluation (you may get corrupted state images from gym)
     rendering = True
 
-    n_test_episodes = 10  # number of episodes to test
-    history_length = 4
+    n_test_episodes = 7  # number of episodes to test
+    history_length = 3
     # TODO: load agent
     agent = Model(history_length)
-    checkp = torch.load('policy1.pth', map_location='cpu')
+    checkp = torch.load('policy.pth', map_location='cpu')
     agent.load_state_dict(checkp)
     agent.eval()
     env = gym.make('CarRacing-v0').unwrapped
+    score_sum = 0.0
     for i in range(n_test_episodes):
-        run_episode(env, agent, rendering=True, max_timesteps=1000)
+        score = run_episode(env, agent, rendering=True, max_timesteps=1000)
+        score_sum += score
 
-
+    print('Average Score: ', score_sum/float(n_test_episodes))
 
     print('... finished')

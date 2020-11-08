@@ -22,15 +22,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class DeepQNetwork:
     def __init__(self, env, batch_size, start_epsilon, end_epsilon, gamma, replay_size, policy_update_frequency,
                  target_update_freq, model_save_frequency, lr, no_of_actions, history_length, polyak_factor, double_dqn,
-                 prioritized_replay):
+                 prioritized_replay, decay, reward_mult_factor):
         self.env = env
         self.batch_size = batch_size
         self.start_epsilon = start_epsilon
         self.end_epsilon = end_epsilon
+        self.epsilon = self.start_epsilon
         self.gamma = gamma
         self.policy = Model(history_length).to(device)
         self.target = Model(history_length).to(device)
-        self.target.load_state_dict(self.policy.state_dict())
+        for target_param, policy_param in zip(self.target.parameters(), self.policy.parameters()):
+            target_param.data.copy_(policy_param)
         self.target.eval()
         self.replay_size = replay_size
         self.no_of_steps_taken = 0
@@ -39,20 +41,14 @@ class DeepQNetwork:
         self.target_update_freq = target_update_freq
         self.model_save_frequency = model_save_frequency
         # self.optimizer = optim.RMSprop(self.policy.parameters())
-        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr, eps=1e-7)
         self.no_of_actions = no_of_actions
-        # self.action_list = [np.array([-1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
-        #                     np.array([0.0, 0.0, 0.2]), np.array([-1.0, 1.0, 0.0]), np.array([1.0, 1.0, 0.0]),
-        #                     np.array([-1.0, 0.0, 0.2]), np.array([1.0, 0.0, 0.2]), np.array([0.0, 0.0, 0.0])]
         self.action_list = [np.array([-1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
-                            np.array([0.0, 0.0, 0.2]), np.array([-1.0, 0.0, 0.2]), np.array([1.0, 0.0, 0.2]),
-                            np.array([0.0, 0.0, 0.0])]
-        # self.action_list = [np.array([-1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
-        #                     np.array([0.0, 0.0, 0.2]), np.array([-1.0, 1.0, 0.0]), np.array([1.0, 1.0, 0.0]),
-        #                     np.array([-1.0, 0.0, 0.2]), np.array([1.0, 0.0, 0.2]), np.array([0.0, 0.0, 0.0])]
-        # self.action_list = [np.array([-1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
-        #                     np.array([0.0, 0.0, 0.2]), np.array([0.0, 0.0, 0.0])]
+                            np.array([0.0, 0.0, 0.2]), np.array([-1.0, 1.0, 0.0]), np.array([1.0, 1.0, 0.0]),
+                            np.array([-1.0, 0.0, 0.2]), np.array([1.0, 0.0, 0.2]), np.array([0.0, 0.0, 0.0]),
+                            np.array([-1.0, 1.0, 0.2]), np.array([1.0, 1.0, 0.2]), np.array([0.0, 1.0, 0.2])]
         self.loss_func = nn.MSELoss()
+        self.decay = decay
         # self.loss_func =
         self.replay_pos = 0
         self.possible_action_nos = [i for i in range(len(self.action_list))]
@@ -61,6 +57,8 @@ class DeepQNetwork:
         self.double_dqn = double_dqn
         self.prioritized_replay = prioritized_replay
         self.Experience = namedtuple('Experience', ('s', 'a', 's1', 'r', 'p'))
+        self.reward_mult_factor = reward_mult_factor
+        self.loss_list = []
 
     def add_to_replay(self, state, action_no, next_state, reward, priority):
         if len(self.replay_memory) < self.replay_size:
@@ -75,14 +73,10 @@ class DeepQNetwork:
         mas = []
         for ep in range(no_of_episodes):
             # self.epsilon = self.start_epsilon - (ep*(self.start_epsilon - self.end_epsilon)/float(0.4*no_of_episodes))
-            if ep > 400:
-                self.epsilon = 0.04
-            else:
-                self.epsilon = self.end_epsilon + (
-                            (self.start_epsilon - self.end_epsilon) / math.exp(self.no_of_steps_taken / 100000.0))
-
-                # if ep+1 % self.target_update_freq:
-            #     self.target.load_state_dict(self.policy.state_dict())
+            print(self.epsilon)
+            if ep + 1 % self.target_update_freq:
+                for target_param, policy_param in zip(self.target.parameters(), self.policy.parameters()):
+                    target_param.data.copy_(policy_param.data)
             #     for target_param, policy_param in zip(self.target.parameters(), self.policy.parameters()):
             # # target_param.data.copy_(target_param.data + (self.polyak_factor * (policy_param.data - target_param.data)))
             #         target_param.data.copy_((self.polyak_factor*policy_param.data) + (target_param.data*(1.0-self.polyak_factor)))
@@ -92,13 +86,13 @@ class DeepQNetwork:
             print('Score: ', ep_score)
             print('\n')
             scores.append(ep_score)
-            torch.save(self.policy.state_dict(), './policy1.pth')
+            torch.save(self.policy.state_dict(), './policy.pth')
             if len(scores) >= 100:
                 ma = float(sum(scores[-100:])) / 100.0
                 mas.append(ma)
                 ma_episodes.append(len(scores))
             plt.clf()
-            plt.plot([ep + 1 for ep in range(len(scores))], scores)
+            plt.plot([e + 1 for e in range(len(scores))], scores)
             if len(scores) >= 100:
                 plt.plot(ma_episodes, mas)
                 plt.legend(['Score', 'Moving Average'], loc='upper left')
@@ -107,8 +101,16 @@ class DeepQNetwork:
             plt.ylabel('Agent Score')
             plt.xlabel('Episode Number')
             # plt.legend(['AgentScore'], loc='upper left')
-            plt.savefig('ScoreVsEpisodeNo1.png')
-            plt.savefig('./drive/My Drive/ScoreVsEpisodeNo1.png')
+            plt.savefig('ScoreVsEpisodeNo.png')
+
+            plt.clf()
+            plt.plot([e + 1 for e in range(ep + 1)], self.loss_list)
+
+            plt.legend(['Loss'], loc='upper left')
+            plt.ylabel('Policy Loss')
+            plt.xlabel('Episode Number')
+            # plt.legend(['AgentScore'], loc='upper left')
+            plt.savefig('LossVsEpisodeNo.png')
 
     def get_action(self, state_list):
 
@@ -116,8 +118,8 @@ class DeepQNetwork:
             print('Epsilon:', self.epsilon)
         random_no = random.random()
         if random_no <= self.epsilon:
-            # a = random.randint(0, self.no_of_actions-1)
-            a = random.choices(self.possible_action_nos, weights=[1, 1, 4, 1, 1, 1, 1], k=1)[0]
+            a = random.randint(0, self.no_of_actions - 1)
+            #  a = random.choices(self.possible_action_nos, weights=[1, 1, 6, 1, 4, 4, 2, 2, 2], k=1)[0]
 
         else:
             self.policy.eval()
@@ -128,8 +130,11 @@ class DeepQNetwork:
 
     def run_policy_optimization(self):
         if len(self.replay_memory) < self.batch_size:
-            return
+            return None
         # self.policy.train()
+
+        if self.epsilon > self.end_epsilon:
+            self.epsilon *= self.decay
 
         if self.prioritized_replay:
             priority_list = list(map(operator.itemgetter(4), self.replay_memory))
@@ -169,17 +174,23 @@ class DeepQNetwork:
 
         target_q_values = target_q_values + rewards
         # loss = F.smooth_l1_loss(q_values, target_q_values.unsqueeze(1))
+        # print(target_q_values)
+        # print(q_values)
         loss = self.loss_func(q_values, target_q_values.unsqueeze(1))
+        # print(loss)
+
         self.optimizer.zero_grad()
         loss.backward()
+
         # for param in self.policy.parameters():
         #     if param.grad is not None:
         #         param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
-        for target_param, policy_param in zip(self.target.parameters(), self.policy.parameters()):
-            # target_param.data.copy_(target_param.data + (self.polyak_factor * (policy_param.data - target_param.data)))
-            target_param.data.copy_(
-                self.polyak_factor * policy_param.data + target_param.data * (1.0 - self.polyak_factor))
+        # for target_param, policy_param in zip(self.target.parameters(), self.policy.parameters()):
+        #     # target_param.data.copy_(target_param.data + (self.polyak_factor * (policy_param.data - target_param.data)))
+        #     target_param.data.copy_(self.polyak_factor*policy_param.data + target_param.data*(1.0-self.polyak_factor))
+
+        return loss.item()
 
     def run_episode(self, rendering=True, max_timesteps=1000):
         episode_reward = 0.0
@@ -188,36 +199,38 @@ class DeepQNetwork:
         state = rgb2gray(state)
         no_neg = 0
         prev_neg = True
-        state_list = [state for _ in range(history_length)]
+        state_list = [state for _ in range(self.history_length)]
         state_list_list = torch.from_numpy(np.array(state_list, dtype=np.float32)).to(device,
                                                                                       dtype=torch.float).reshape(-1,
                                                                                                                  history_length,
                                                                                                                  96, 96)
+        ep_loss = 0.0
+        ep_loss_count = 0
         for t in range(max_timesteps):
             action, action_no = self.get_action(state_list_list)
-            next_state, r, done, _ = self.env.step(action)
+            reward = 0.0
+            for _ in range(self.policy_update_freq):
 
-            episode_reward += r
+                next_state, r, done, _ = self.env.step(action)
+                reward += r
+                step += 1
+                if done:
+                    break
+
+            no_neg += 1 if step > 300 and reward < 0 else 0
+
+            episode_reward += reward
+
+            # if action[1] == 1 and action[2] == 0:
+            #     reward *= self.reward_mult_factor
+
             state_list.pop(0)
             state_list.append(rgb2gray(next_state))
             new_state_list = torch.from_numpy(np.array(state_list, dtype=np.float32)).to(device,
-                                                                                         dtype=torch.float).reshape(-1,
-                                                                                                                    history_length,
-                                                                                                                    96,
-                                                                                                                    96)
-            step += 1
+                                                            dtype=torch.float).reshape(-1, history_length, 96, 96)
+            # print(new_state_list.shape())
 
-            if r > 0.0:
-                prev_neg = False
-                no_neg = 0
-                priority = 3
-            else:
-                no_neg += 1
-                priority = 1
-                prev_neg = True
-                if no_neg > 250:
-                    done = True
-                    r = -30.0
+            priority = 1
 
             if done:
                 self.add_to_replay(state_list_list, torch.tensor([[action_no]], device=device, dtype=torch.long), None,
@@ -232,17 +245,24 @@ class DeepQNetwork:
             if step % 500 == 0:
                 print('Step No:', step)
 
-            self.no_of_steps_taken += 1
             if self.no_of_steps_taken % self.policy_update_freq == 0:
-                self.run_policy_optimization()
+                loss = self.run_policy_optimization()
+                if loss is not None:
+                    ep_loss += loss
+                    ep_loss_count += 1
+
+            self.no_of_steps_taken += 1
 
             if self.no_of_steps_taken % self.model_save_frequency == 0:
-                torch.save(self.policy.state_dict(), './drive/My Drive/policy1.pth')
+                torch.save(self.policy.state_dict(), './policy.pth')
 
             if rendering:
                 self.env.render()
-            if done:
+            if done or no_neg >= 25:
                 break
+
+        self.loss_list.append(ep_loss / float(ep_loss_count))
+        print('Episode Average Loss: ', ep_loss / float(ep_loss_count))
 
         self.env.close()
 
@@ -251,24 +271,26 @@ class DeepQNetwork:
 
 if __name__ == '__main__':
     env = gym.make('CarRacing-v0').unwrapped
-    start_epsilon = 0.95
-    end_epsilon = 0.05
+    start_epsilon = 1.0
+    end_epsilon = 0.1
+    decay = 0.9999
     gamma = 0.95
-    replay_size = 80000
+    replay_size = 10000
     batch_size = 64
     policy_update_frequency = 3  # steps
-    target_update_frequency = 10  # episodes
+    target_update_frequency = 5  # episodes
     model_save_frequency = 1000
-    lr = 0.0004
-    no_of_actions = 7
-    history_length = 4
+    lr = 0.001
+    no_of_actions = 12
+    history_length = 3
     # polyak_factor = 0.999
-    polyak_factor = 0.001
-    double_dqn = False
-    prioritized_replay = True
+    polyak_factor = 0.0005
+    double_dqn = True
+    prioritized_replay = False
+    reward_mult_factor = 1.5
     # max_consec_neg =
 
     agent = DeepQNetwork(env, batch_size, start_epsilon, end_epsilon, gamma, replay_size, policy_update_frequency,
                          target_update_frequency, model_save_frequency, lr, no_of_actions,
-                         history_length, polyak_factor, double_dqn, prioritized_replay)
-    agent.train(900)
+                         history_length, polyak_factor, double_dqn, prioritized_replay, decay, reward_mult_factor)
+    agent.train(600)
